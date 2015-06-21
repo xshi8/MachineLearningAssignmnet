@@ -1,0 +1,118 @@
+---
+title: "Prediction Assignment"
+author: "Xiaoli Shi"
+date: "Thursday, June 18, 2015"
+output: html_document
+---
+Overview:
+
+In this project, the goal is to analyze data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts correctly and incorrectly in 5 different ways to create a predictive model of quantifying how well participants do a particular activity. The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. 
+
+Many techiques are used to reduce variables before random forest model fitting. The reason why Random forest is chosen is because it can be used not only for prediction, but also to access vaiable importance.
+
+
+Data Pre-processing:
+
+Training and testing csv data set are downloaded from the following sites and loaded into R:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+There are 19622 rows and 160 columns for training data set, 20 rows and 160 columns for testing data set.Record identifier,Vairables with 95% NAs and vairables specific to subjects, such as user_name,cvtd_timestamp and etc, are removed first to reduce variables.
+
+```{r,echo=FALSE}
+
+# read csv into R
+setInternet2(use = TRUE)
+download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv',destfile='pml_training.csv')
+download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv',destfile='pml_testing.csv')
+training <- read.csv('pml_training.csv',na.strings=c("NA","","#DIV/0!"))
+testing <- read.csv('pml_testing.csv',na.strings=c("NA"," ","#DIV/0!"))
+
+dim(training) ; dim(testing)  
+str(training)
+summary(training)
+
+# remove unnecessary variables to predictions: record identifier-X, user name, timestamp
+drops <- c('X','user_name','cvtd_timestamp','raw_timestamp_part_1','raw_timestamp_part_2',
+           'num_window','new_window')
+Train <- training[,!(names(training) %in% drops)]
+Test  <- testing[,!(names(testing) %in% drops)]
+
+# remove variables with  95% of NAs
+NArate <- sapply(Train,function(var) sum(is.na(var))/dim(training)[1]) 
+highNA <- names(NArate[NArate >0.95])
+Train <- Train[, !(names(Train) %in% highNA )]
+Test <- Test[, !(names(Test) %in% highNA)]
+
+```
+
+Further variable reductions are done by R caret package.Highly correlated variables (|correlation coefficiency| > 0.75 ) are removed.After the above variable reduction steps, there are 33 variables including the outcome 'classe' remaining. A scatterplot matrix of pitch-related variables is presented.
+
+```{r,echo=FALSE}
+
+# check whether or not the caret package is installed. If not, install it 
+if (!is.element('caret', installed.packages()[,1])) {install.packages('caret')}
+library(caret)
+ 
+# remove highly correlated predicators: 
+# There are 31 predicators that are higly correlated( absolute correlation coeff >0.75 )
+varCor <-cor(Train[,-53]) # the outcome variable 'classe' is the last position
+sum(abs(varCor[upper.tri(varCor)]) > 0.75)
+
+highlyCorVar <- findCorrelation(varCor,cutoff=0.75)
+Train <- Train[,-highlyCorVar]
+Test <- Test[,-highlyCorVar]
+```
+
+```{r,echo=TRUE}
+# scatterplot matrix of pitch related variables:
+
+varsPitch <- Train[,grepl('pitch_.*',names(Train), perl=T)]
+featurePlot(varsPitch,Train$classe,plot='pairs',auto.key=list(columns=5))
+```
+
+
+Model Fitting:
+
+50% of data from the training data set are used for model fitting with caret package random forest method, and the remaining for evaluating model accuaccy. Three separate 5-fold cross-validation is chosen in model training. 
+
+```{r,echo=FALSE}
+set.seed(100)
+inTrain <- createDataPartition(Train$classe, p=0.5, list=F)
+Train1 <-  Train[inTrain,]
+Train2 <-  Train[-inTrain,]
+rfFit <- train(classe ~.,data=Train1,method='rf', 
+               trControl=trainControl(method='repeatedcv',number=5,repeats=3),
+               allowParallel=T)
+rfFit
+rfFit$finalModel
+```
+
+The out-of-sample error is obtained by applying the model into Train2 data set, which is excluded in model fitting. There is 98.59% out of sample accuracy, which is consistant with % 98.61 accuracy of final RF model from random forest's interal cross-validation.
+
+```{r,echo=FALSE}
+pred.mod <- predict(rfFit,newdata=Train2)
+confusionMatrix(pred.mod,Train2$classe)
+```
+
+Variable importance plot is shown below. Then the random forest can be run again using only the most important variables(not done in this project). 
+```{r,echo=TRUE}
+importance <- varImp(rfFit,scale=FALSE)
+plot(importance, main='Variable Importance')
+```
+
+
+Predicting new data:
+```{r,echo=FALSE}
+answers <- predict(rfFit,newdata=Test)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(answers)
+```
+
